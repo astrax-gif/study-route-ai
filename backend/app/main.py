@@ -1,3 +1,7 @@
+from fastapi import Response
+
+from app.ics import tasks_to_ics
+from app.schemas import Task
 from app.schemas import PlanRequest
 from app.scheduler import build_plan
 from datetime import date
@@ -40,3 +44,12 @@ async def extract(files: list[UploadFile] = File(...), start_date: date = Form(.
 @app.post("/plan")
 def plan(req: PlanRequest):
     return build_plan(req.items, req.start_date, req.hours_per_day)
+@app.post("/export.ics")
+def export_ics(req: PlanRequest):
+    plan = build_plan(req.items, req.start_date, req.hours_per_day)
+    tasks = [Task(**t) for t in plan["tasks"]]
+    return Response(
+        content=tasks_to_ics(tasks),
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=study-plan.ics"},
+    )
