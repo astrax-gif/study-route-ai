@@ -2,6 +2,13 @@ import { useState } from "react";
 
 const API = "http://127.0.0.1:8000";
 
+const todayISO = () =>
+  new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 10);
+
+const taskKey = (t) => `${t.day}|${t.course}|${t.title}`;
+
 export default function App() {
   const [step, setStep] = useState("upload");
   const [files, setFiles] = useState([]);
@@ -10,6 +17,10 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [errors, setErrors] = useState([]);
   const [plan, setPlan] = useState(null);
+  const [planStart, setPlanStart] = useState("2026-10-26");
+  const [done, setDone] = useState({});
+  const [replanFrom, setReplanFrom] = useState(todayISO());
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -45,27 +56,71 @@ export default function App() {
     setItems((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  const body = () =>
+  const body = (start, its) =>
     JSON.stringify({
-      items,
-      start_date: startDate,
+      items: its,
+      start_date: start,
       hours_per_day: Number(hours),
     });
+
+  async function requestPlan(start, its) {
+    const res = await fetch(`${API}/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body(start, its),
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    return res.json();
+  }
 
   async function makePlan() {
     setLoading(true);
     setMessage("");
     try {
-      const res = await fetch(`${API}/plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body(),
-      });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      setPlan(await res.json());
+      setPlan(await requestPlan(startDate, items));
+      setPlanStart(startDate);
+      setDone({});
+      setNotice("");
       setStep("plan");
     } catch (e) {
       setMessage(`Could not build plan: ${e.message}`);
+    }
+    setLoading(false);
+  }
+
+  // "I missed a day": ticked tasks count as done, the rest is re-planned
+  async function replan() {
+    if (!plan) return;
+    const doneHours = {};
+    plan.tasks.forEach((t) => {
+      if (done[taskKey(t)]) {
+        const k = `${t.course}|${t.title}`;
+        doneHours[k] = (doneHours[k] || 0) + t.hours;
+      }
+    });
+    const remaining = items
+      .map((it) => ({
+        ...it,
+        est_hours:
+          Math.round(
+            (it.est_hours - (doneHours[`${it.course}|${it.title}`] || 0)) * 100
+          ) / 100,
+      }))
+      .filter((it) => it.est_hours > 0.01);
+
+    setLoading(true);
+    setMessage("");
+    try {
+      const newPlan = await requestPlan(replanFrom, remaining);
+      setItems(remaining);
+      setPlan(newPlan);
+      setPlanStart(replanFrom);
+      setDone({});
+      setNotice(
+        `Re-planned from ${replanFrom}. ${remaining.length} item(s) of work left.`
+      );
+    } catch (e) {
+      setMessage(`Could not re-plan: ${e.message}`);
     }
     setLoading(false);
   }
@@ -74,7 +129,7 @@ export default function App() {
     const res = await fetch(`${API}/export.ics`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: body(),
+      body: body(planStart, items),
     });
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -91,6 +146,9 @@ export default function App() {
         return acc;
       }, {})
     : {};
+
+  const doneCount = Object.values(done).filter(Boolean).length;
+  const totalCount = plan ? plan.tasks.length : 0;
 
   const input = "rounded border border-slate-300 px-2 py-1 w-full";
   const button =
@@ -145,7 +203,7 @@ export default function App() {
               any time.
             </p>
             <button className={button} disabled={loading} onClick={extract}>
-              {loading ? "Reading your syllabi..." : "Extract deadlines"}
+              {loading ? "Reading your syllabi (can take up to a minute)..." : "Extract deadlines"}
             </button>
           </section>
         )}
@@ -211,8 +269,13 @@ export default function App() {
 
         {step === "plan" && plan && (
           <section className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold">3. Your daily plan</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold">3. Your daily plan</h2>
+                <p className="text-sm text-slate-500">
+                  {doneCount} of {totalCount} tasks done
+                </p>
+              </div>
               <div className="flex gap-3">
                 <button className="rounded-lg border px-4 py-2" onClick={() => setStep("review")}>
                   Edit items
@@ -221,6 +284,31 @@ export default function App() {
                   Download .ics
                 </button>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+              <b>Fell behind?</b>
+              <p className="text-sm text-slate-600">
+                Tick what you finished, pick the day you are restarting from,
+                and the plan is rebuilt around the work that is left.
+              </p>
+              <div className="mt-3 flex flex-wrap items-end gap-3">
+                <label className="text-sm">
+                  Re-plan from
+                  <input
+                    type="date"
+                    className={input}
+                    value={replanFrom}
+                    onChange={(e) => setReplanFrom(e.target.value)}
+                  />
+                </label>
+                <button className={button} disabled={loading} onClick={replan}>
+                  {loading ? "Re-planning..." : "I missed a day: re-plan"}
+                </button>
+              </div>
+              {notice && (
+                <p className="mt-3 text-sm font-semibold text-indigo-700">{notice}</p>
+              )}
             </div>
 
             {plan.at_risk.length > 0 && (
@@ -247,10 +335,16 @@ export default function App() {
             {Object.entries(byDay).map(([day, tasks]) => (
               <div key={day} className="rounded-xl bg-white p-4 shadow">
                 <h3 className="font-bold text-indigo-700">{day}</h3>
-                {tasks.map((t, i) => (
-                  <label key={i} className="flex items-center gap-3 py-1">
-                    <input type="checkbox" />
-                    <span>
+                {tasks.map((t) => (
+                  <label key={taskKey(t)} className="flex items-center gap-3 py-1">
+                    <input
+                      type="checkbox"
+                      checked={!!done[taskKey(t)]}
+                      onChange={(e) =>
+                        setDone((d) => ({ ...d, [taskKey(t)]: e.target.checked }))
+                      }
+                    />
+                    <span className={done[taskKey(t)] ? "text-slate-400 line-through" : ""}>
                       <b>{t.course}</b>: {t.title}
                     </span>
                     <span className="ml-auto text-sm text-slate-500">{t.hours}h</span>
