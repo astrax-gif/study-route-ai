@@ -28,12 +28,4 @@
 * **Backend:** Python, FastAPI, asynchronous file processing (`pypdf`)
 * **AI & Audio:** LLM APIs for structured JSON extraction, `smallest.ai` TTS API
 * **Export:** ICS calendar synchronization
-
----
-
-## ⚙️ Quick Start (Local Setup)
-
-### 1. Clone the repository
-```bash
-git clone [https://github.com/your-username/study-route-ai.git](https://github.com/your-username/study-route-ai.git)
-cd study-route-ai
+* 
