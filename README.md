@@ -160,4 +160,4 @@ MIT (add a `LICENSE` file to the repo).
 
 ---
 
-<p align="center"><i>Built for hackCBS 9.0. The AI reads. The code plans. You study.</i></p>
+<p align="center"><i>Built for hackglobal The AI reads. The code plans. You study.</i></p>
