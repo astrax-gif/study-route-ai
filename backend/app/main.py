@@ -1,17 +1,14 @@
-from fastapi import Response
-
-from app.ics import tasks_to_ics
-from app.schemas import Task
-from app.schemas import PlanRequest
-from app.scheduler import build_plan
 from datetime import date
 from pathlib import Path
 
-from fastapi import File, Form, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.extract import extract_items, pdf_to_text
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from app.ics import tasks_to_ics
+from app.scheduler import build_plan
+from app.schemas import PlanRequest, Task
 
 app = FastAPI(title="Study Route AI")
 
@@ -26,6 +23,8 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
 @app.post("/extract")
 async def extract(files: list[UploadFile] = File(...), start_date: date = Form(...)):
     all_items, errors = [], []
@@ -38,16 +37,25 @@ async def extract(files: list[UploadFile] = File(...), start_date: date = Form(.
         try:
             items = extract_items(text, course, start_date)
             all_items.extend(i.model_dump(mode="json") for i in items)
+        except httpx.HTTPStatusError as e:
+            errors.append(
+                f"{f.filename}: AI service error {e.response.status_code}. "
+                "Check LLM_MODEL and LLM_API_KEY in .env"
+            )
         except Exception as e:
             errors.append(f"{f.filename}: {e}")
     return {"items": all_items, "errors": errors}
+
+
 @app.post("/plan")
 def plan(req: PlanRequest):
     return build_plan(req.items, req.start_date, req.hours_per_day)
+
+
 @app.post("/export.ics")
 def export_ics(req: PlanRequest):
-    plan = build_plan(req.items, req.start_date, req.hours_per_day)
-    tasks = [Task(**t) for t in plan["tasks"]]
+    result = build_plan(req.items, req.start_date, req.hours_per_day)
+    tasks = [Task(**t) for t in result["tasks"]]
     return Response(
         content=tasks_to_ics(tasks),
         media_type="text/calendar",

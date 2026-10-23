@@ -47,22 +47,46 @@ def call_llm(prompt: str) -> str:
     key = os.getenv("LLM_API_KEY")
     if not key:
         return MOCK_RESPONSE
-    response = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 4000,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=90,
-    )
-    response.raise_for_status()
-    return response.json()["content"][0]["text"]
+    provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
+
+    if provider == "anthropic":
+        r = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={"model": os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
+                  "max_tokens": 4000,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=90,
+        )
+        r.raise_for_status()
+        return r.json()["content"][0]["text"]
+
+    if provider == "openai":
+        r = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=90,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    if provider == "gemini":
+        model = os.getenv("LLM_MODEL", "gemini-flash-latest")
+        r = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"},
+            },
+            timeout=180,
+        )
+        r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
 
 
 def parse_json_array(text: str) -> list[dict]:
@@ -90,7 +114,7 @@ def resolve_relative(item: Item, term_start: date) -> Item:
 
 
 def extract_items(text: str, course: str, term_start: date) -> list[Item]:
-    prompt = PROMPT.replace("<<TEXT>>", text[:30000])
+    prompt = PROMPT.replace("<<TEXT>>", text[:12000])
 
     rows = None
     for _attempt in range(2):  # try once, retry once
