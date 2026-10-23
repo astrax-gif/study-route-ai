@@ -1,3 +1,5 @@
+from app.schemas import PlanRequest
+from app.scheduler import build_plan
 from datetime import date
 from pathlib import Path
 
@@ -35,3 +37,6 @@ async def extract(files: list[UploadFile] = File(...), start_date: date = Form(.
         except Exception as e:
             errors.append(f"{f.filename}: {e}")
     return {"items": all_items, "errors": errors}
+@app.post("/plan")
+def plan(req: PlanRequest):
+    return build_plan(req.items, req.start_date, req.hours_per_day)
