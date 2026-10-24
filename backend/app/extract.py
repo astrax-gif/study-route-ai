@@ -1,9 +1,11 @@
+import hashlib
 import json
 import os
 import re
 import time
 from datetime import date, timedelta
 from io import BytesIO
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -13,6 +15,8 @@ from pypdf import PdfReader
 from app.schemas import Item
 
 load_dotenv()
+
+CACHE_DIR = Path(__file__).resolve().parent.parent / "extract_cache"
 
 PROMPT = """You extract deadlines from a university syllabus.
 Return ONLY a JSON array, no other text and no markdown.
@@ -49,11 +53,11 @@ def pdf_to_text(data: bytes) -> str:
 
 
 def _post(url, **kwargs):
-    """POST with retries for temporary errors (busy or rate-limited servers)."""
-    for attempt in range(4):
+    """POST with short retries for temporary errors (busy or rate-limited servers)."""
+    for attempt in range(3):
         r = httpx.post(url, **kwargs)
-        if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
-            time.sleep(3 * (attempt + 1))
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+            time.sleep(2 * (attempt + 1))
             continue
         return r
 
@@ -78,7 +82,7 @@ def call_llm(prompt: str) -> str:
                 "max_tokens": 4000,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=180,
+            timeout=120,
         )
         r.raise_for_status()
         return r.json()["content"][0]["text"]
@@ -91,22 +95,29 @@ def call_llm(prompt: str) -> str:
                 "model": model or "gpt-4o-mini",
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=180,
+            timeout=120,
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
 
     if provider == "gemini":
-        model = model or "gemini-flash-latest"
-        r = _post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json"},
-            },
-            timeout=180,
-        )
+        fallbacks = [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
+        models = [model or "gemini-flash-latest"] + fallbacks
+        r = None
+        for i, m in enumerate(models):
+            r = _post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                params={"key": key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                },
+                timeout=120,
+            )
+            busy = r.status_code in (404, 429, 500, 502, 503, 504)
+            if busy and i < len(models) - 1:
+                continue  # try the next model
+            break
         r.raise_for_status()
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -137,9 +148,17 @@ def resolve_relative(item: Item, term_start: date) -> Item:
     return item
 
 
-def extract_items(text: str, course: str, term_start: date) -> list[Item]:
-    prompt = PROMPT.replace("<<TEXT>>", text[:12000])
+def _load_rows(text: str) -> list[dict]:
+    """Return extracted rows, using the cache when this exact text was read before."""
+    snippet = text[:12000]
+    cache_file = CACHE_DIR / (hashlib.sha256(snippet.encode()).hexdigest()[:24] + ".json")
+    if cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
+    prompt = PROMPT.replace("<<TEXT>>", snippet)
     rows = None
     for _attempt in range(2):  # try once, retry once
         try:
@@ -150,6 +169,17 @@ def extract_items(text: str, course: str, term_start: date) -> list[Item]:
     if rows is None:
         raise ValueError("The AI response could not be read as valid JSON")
 
+    if os.getenv("LLM_API_KEY", "").strip():  # never cache the fake mock rows
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            cache_file.write_text(json.dumps(rows), encoding="utf-8")
+        except Exception:
+            pass
+    return rows
+
+
+def extract_items(text: str, course: str, term_start: date) -> list[Item]:
+    rows = _load_rows(text)
     items = []
     for row in rows:
         try:
