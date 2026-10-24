@@ -50,7 +50,7 @@ export default function App() {
   const [message, setMessage] = useState("");
 
   async function extract() {
-    if (!files.length) return setMessage("Choose at least one PDF first.");
+    if (!files.length) return setMessage("Choose at least one PDF or slide deck first.");
     setLoading(true);
     setMessage("");
     try {
@@ -202,19 +202,19 @@ export default function App() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDrag(false);
-                setFiles([...e.dataTransfer.files].filter((f) => f.name.toLowerCase().endsWith(".pdf")));
+                setFiles([...e.dataTransfer.files].filter((f) => /\.(pdf|pptx)$/i.test(f.name)));
               }}
               className={`rounded-xl border-2 border-dashed p-8 text-center transition ${
                 drag ? "border-indigo-500 bg-indigo-50" : "border-slate-300"
               }`}
             >
               <p className="text-4xl">📄</p>
-              <p className="font-semibold">Drag your syllabus PDFs here</p>
+              <p className="font-semibold">Drag your syllabus PDFs or slide decks here</p>
               <label className="cursor-pointer text-indigo-600 underline">
                 or browse files
                 <input
                   type="file"
-                  accept="application/pdf"
+                  accept=".pdf,.pptx"
                   multiple
                   className="hidden"
                   onChange={(e) => setFiles([...e.target.files])}
@@ -245,7 +245,7 @@ export default function App() {
               AI provider to read it and to a voice provider for audio. You can delete your data at any time.
             </p>
             {loading ? (
-              <Spinner text="Reading your syllabi... this can take up to a minute" />
+              <Spinner text="Reading your files... this can take up to a minute" />
             ) : (
               <button className={button} onClick={extract}>Extract deadlines</button>
             )}
