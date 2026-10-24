@@ -41,7 +41,7 @@ for name, expected in EXPECTED.items():
         text = pdf_to_text(path.read_bytes())
         items = extract_items(text, path.stem.replace("_", " "), START)
     except Exception as e:
-        print(f"\n{name}: FAILED ({type(e).__name__}: {e})")
+        print(f"\n{name}: FAILED ({type(e).__name__})")
         total_fields += len(expected) * 2
         continue
     secs = time.time() - t0

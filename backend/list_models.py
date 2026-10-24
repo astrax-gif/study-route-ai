@@ -14,7 +14,7 @@ names = [
     for m in r.json().get("models", [])
     if "generateContent" in m.get("supportedGenerationMethods", [])
 ]
-bad = ("tts", "image", "live", "audio", "robotics", "computer", "research", "antigravity", "embedding")
+bad = ("tts", "image", "live", "audio", "robotics", "computer", "research", "antigravity", "embedding", "transcribe")
 names = [n for n in names if n.startswith("gemini") and not any(b in n for b in bad)]
 print("Trying", len(names), "models...\n")
 

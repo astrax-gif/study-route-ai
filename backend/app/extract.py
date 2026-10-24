@@ -107,15 +107,14 @@ def call_llm(prompt: str) -> str:
         for i, m in enumerate(models):
             r = _post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
-                params={"key": key},
+                headers={"x-goog-api-key": key},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"responseMimeType": "application/json"},
                 },
                 timeout=120,
             )
-            busy = r.status_code in (404, 429, 500, 502, 503, 504)
-            if busy and i < len(models) - 1:
+            if r.status_code in (400, 404, 429, 500, 502, 503, 504) and i < len(models) - 1:
                 continue  # try the next model
             break
         r.raise_for_status()
