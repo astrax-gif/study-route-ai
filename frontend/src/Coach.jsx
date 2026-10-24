@@ -107,7 +107,7 @@ export default function Coach({ tasks }) {
                       onClick={() => setAnswers((a) => ({ ...a, [i]: j }))}
                       className={`rounded border px-3 py-2 text-left ${style}`}
                     >
-                      {opt}
+                                            {picked && j === q.answer_index ? "✓ " : ""}{opt}
                     </button>
                   );
                 })}
