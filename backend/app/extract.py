@@ -1,99 +1,212 @@
+import hashlib
+import json
 import os
-from datetime import date
+import re
+import time
+from datetime import date, timedelta
+from io import BytesIO
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from dotenv import load_dotenv
+from pydantic import ValidationError
+from pypdf import PdfReader
 
-from app.extract import extract_items, file_to_text
-from app.ics import tasks_to_ics
-from app.quiz import make_quiz
-from app.scheduler import build_plan
-from app.schemas import PlanRequest, Task
-from app.tts import speak
+from app.schemas import Item
 
-app = FastAPI(title="Study Route AI")
+load_dotenv()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+CACHE_DIR = Path(__file__).resolve().parent.parent / "extract_cache"
+
+PROMPT = """You extract deadlines from a university syllabus.
+Return ONLY a JSON array, no other text and no markdown.
+Each element must have exactly these keys:
+  "title": string,
+  "type": one of "assignment", "exam", "quiz", "reading",
+  "due_date": "YYYY-MM-DD" or null,
+  "relative_date": text like "Week 7" or null,
+  "grade_weight": number (percent of final grade, 0 if unknown),
+  "est_hours": number (your estimate of hours of work)
+Rules:
+- Use null when unknown. NEVER guess a date.
+- If something repeats (for example homework due every second Friday), list each occurrence as its own element with its own date and the weight of one occurrence.
+- If an item has a week number but no exact date, put the week in relative_date and leave due_date null.
+- Include items with no date too (due_date null), such as class participation.
+
+SYLLABUS TEXT:
+<<TEXT>>
+"""
+
+# Used when no API key is set, so you can test the whole pipeline for free.
+MOCK_RESPONSE = json.dumps([
+    {"title": "Midterm Exam", "type": "exam", "due_date": None,
+     "relative_date": "Week 7", "grade_weight": 30, "est_hours": 10},
+    {"title": "Essay 1", "type": "assignment", "due_date": "2026-11-20",
+     "relative_date": None, "grade_weight": 15, "est_hours": 6},
+])
 
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+def pdf_to_text(data: bytes) -> str:
+    reader = PdfReader(BytesIO(data))
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return "\n".join(pages).strip()
 
 
-@app.post("/extract")
-async def extract(files: list[UploadFile] = File(...), start_date: date = Form(...)):
-    all_items, errors = [], []
-    for f in files:
-        course = Path(f.filename).stem.replace("_", " ")
-        try:
-            text = file_to_text(f.filename, await f.read())
-        except Exception:
-            errors.append(f"{f.filename}: could not read this file. Use a PDF or .pptx")
+def pptx_to_text(data: bytes) -> str:
+    from pptx import Presentation
+
+    prs = Presentation(BytesIO(data))
+    parts = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                parts.append(shape.text_frame.text)
+            if getattr(shape, "has_table", False) and shape.has_table:
+                for row in shape.table.rows:
+                    parts.append(" | ".join(c.text for c in row.cells))
+    return "\n".join(parts).strip()
+
+
+def file_to_text(filename: str, data: bytes) -> str:
+    if filename.lower().endswith(".pptx"):
+        return pptx_to_text(data)
+    return pdf_to_text(data)
+
+
+def _post(url, **kwargs):
+    """POST with short retries for temporary errors (busy or rate-limited servers)."""
+    for attempt in range(3):
+        r = httpx.post(url, **kwargs)
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+            time.sleep(2 * (attempt + 1))
             continue
-        if not text:
-            errors.append(f"{f.filename}: no text found (scanned PDF? OCR not supported yet)")
-            continue
-        try:
-            items = extract_items(text, course, start_date)
-            all_items.extend(i.model_dump(mode="json") for i in items)
-        except httpx.HTTPStatusError as e:
-            code = e.response.status_code
-            hint = (
-                "The AI service is busy. Wait a minute and try again."
-                if code in (429, 503)
-                else "Check LLM_MODEL and LLM_API_KEY in .env"
+        return r
+
+
+def call_llm(prompt: str) -> str:
+    key = os.getenv("LLM_API_KEY", "").strip()
+    if not key:
+        return MOCK_RESPONSE
+    provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+    model = os.getenv("LLM_MODEL", "").strip()
+
+    if provider == "anthropic":
+        r = _post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model or "claude-sonnet-4-6",
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=120,
+        )
+        r.raise_for_status()
+        return r.json()["content"][0]["text"]
+
+    if provider == "openai":
+        r = _post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model or "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=120,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+    if provider == "gemini":
+        fallbacks = [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
+        models = [model or "gemini-flash-latest"] + fallbacks
+        r = None
+        for i, m in enumerate(models):
+            r = _post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                headers={"x-goog-api-key": key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                },
+                timeout=120,
             )
-            errors.append(f"{f.filename}: AI service error {code}. {hint}")
-        except Exception as e:
-            errors.append(f"{f.filename}: {type(e).__name__}")
-    return {"items": all_items, "errors": errors}
+            if r.status_code in (400, 404, 429, 500, 502, 503, 504) and i < len(models) - 1:
+                continue  # try the next model
+            break
+        r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+    raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
 
 
-@app.post("/plan")
-def plan(req: PlanRequest):
-    return build_plan(req.items, req.start_date, req.hours_per_day)
+def parse_json_array(text: str) -> list[dict]:
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end == -1:
+        raise ValueError("No JSON array found")
+    rows = json.loads(text[start : end + 1])
+    if not isinstance(rows, list):
+        raise ValueError("Expected a list")
+    return rows
 
 
-@app.post("/export.ics")
-def export_ics(req: PlanRequest):
-    result = build_plan(req.items, req.start_date, req.hours_per_day)
-    tasks = [Task(**t) for t in result["tasks"]]
-    return Response(
-        content=tasks_to_ics(tasks),
-        media_type="text/calendar",
-        headers={"Content-Disposition": "attachment; filename=study-plan.ics"},
-    )
+def resolve_relative(item: Item, term_start: date) -> Item:
+    """Turn 'Week 7' into a real date and flag it for the student to check."""
+    if item.due_date is None and item.relative_date:
+        match = re.search(r"week\s*(\d+)", item.relative_date, re.IGNORECASE)
+        if match:
+            week = int(match.group(1))
+            item.due_date = term_start + timedelta(weeks=week - 1)
+            item.needs_review = True
+    if item.due_date is None:
+        item.needs_review = True
+    return item
 
 
-class QuizRequest(BaseModel):
-    tasks: list[Task]
+def _load_rows(text: str) -> list[dict]:
+    """Return extracted rows, using the cache when this exact text was read before."""
+    snippet = text[:12000]
+    cache_file = CACHE_DIR / (hashlib.sha256(snippet.encode()).hexdigest()[:24] + ".json")
+    if cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    prompt = PROMPT.replace("<<TEXT>>", snippet)
+    rows = None
+    for _attempt in range(2):  # try once, retry once
+        try:
+            rows = parse_json_array(call_llm(prompt))
+            break
+        except (ValueError, json.JSONDecodeError):
+            continue
+    if rows is None:
+        raise ValueError("The AI response could not be read as valid JSON")
+
+    if os.getenv("LLM_API_KEY", "").strip():  # never cache the fake mock rows
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            cache_file.write_text(json.dumps(rows), encoding="utf-8")
+        except Exception:
+            pass
+    return rows
 
 
-class SpeakRequest(BaseModel):
-    text: str
-
-
-@app.post("/quiz")
-def quiz(req: QuizRequest):
-    return make_quiz([t.model_dump(mode="json") for t in req.tasks])
-
-
-@app.post("/audio")
-def audio(req: SpeakRequest):
-    try:
-        path = speak(req.text)
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(502, f"Voice service error {e.response.status_code}")
-    except Exception as e:
-        raise HTTPException(500, type(e).__name__)
-    return FileResponse(path, media_type="audio/wav")
+def extract_items(text: str, course: str, term_start: date) -> list[Item]:
+    rows = _load_rows(text)
+    items = []
+    for row in rows:
+        try:
+            item = Item(course=course, **row)
+        except (ValidationError, TypeError):
+            # One bad row must not break the whole sheet
+            title = str(row.get("title", "Unknown item")) if isinstance(row, dict) else "Unknown item"
+            item = Item(course=course, title=title, type="assignment", needs_review=True)
+        items.append(resolve_relative(item, term_start))
+    return items

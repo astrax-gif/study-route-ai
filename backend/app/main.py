@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.extract import extract_items, pdf_to_text
+from app.extract import extract_items, file_to_text
 from app.ics import tasks_to_ics
 from app.quiz import make_quiz
 from app.scheduler import build_plan
@@ -34,8 +34,12 @@ def health():
 async def extract(files: list[UploadFile] = File(...), start_date: date = Form(...)):
     all_items, errors = [], []
     for f in files:
-        course = Path(f.filename).stem
-        text = pdf_to_text(await f.read())
+        course = Path(f.filename).stem.replace("_", " ")
+        try:
+            text = file_to_text(f.filename, await f.read())
+        except Exception:
+            errors.append(f"{f.filename}: could not read this file. Use a PDF or .pptx")
+            continue
         if not text:
             errors.append(f"{f.filename}: no text found (scanned PDF? OCR not supported yet)")
             continue
@@ -51,7 +55,7 @@ async def extract(files: list[UploadFile] = File(...), start_date: date = Form(.
             )
             errors.append(f"{f.filename}: AI service error {code}. {hint}")
         except Exception as e:
-            errors.append(f"{f.filename}: {e}")
+            errors.append(f"{f.filename}: {type(e).__name__}")
     return {"items": all_items, "errors": errors}
 
 
@@ -91,5 +95,5 @@ def audio(req: SpeakRequest):
     except httpx.HTTPStatusError as e:
         raise HTTPException(502, f"Voice service error {e.response.status_code}")
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, type(e).__name__)
     return FileResponse(path, media_type="audio/wav")
