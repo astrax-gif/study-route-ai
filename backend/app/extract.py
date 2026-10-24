@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from datetime import date, timedelta
 from io import BytesIO
 
@@ -22,7 +23,11 @@ Each element must have exactly these keys:
   "relative_date": text like "Week 7" or null,
   "grade_weight": number (percent of final grade, 0 if unknown),
   "est_hours": number (your estimate of hours of work)
-Rules: use null when unknown. NEVER guess a date.
+Rules:
+- Use null when unknown. NEVER guess a date.
+- If something repeats (for example homework due every second Friday), list each occurrence as its own element with its own date and the weight of one occurrence.
+- If an item has a week number but no exact date, put the week in relative_date and leave due_date null.
+- Include items with no date too (due_date null), such as class participation.
 
 SYLLABUS TEXT:
 <<TEXT>>
@@ -43,38 +48,57 @@ def pdf_to_text(data: bytes) -> str:
     return "\n".join(pages).strip()
 
 
+def _post(url, **kwargs):
+    """POST with retries for temporary errors (busy or rate-limited servers)."""
+    for attempt in range(4):
+        r = httpx.post(url, **kwargs)
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+            time.sleep(3 * (attempt + 1))
+            continue
+        return r
+
+
 def call_llm(prompt: str) -> str:
-    key = os.getenv("LLM_API_KEY")
+    key = os.getenv("LLM_API_KEY", "").strip()
     if not key:
         return MOCK_RESPONSE
-    provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
+    provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+    model = os.getenv("LLM_MODEL", "").strip()
 
     if provider == "anthropic":
-        r = httpx.post(
+        r = _post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
-                  "max_tokens": 4000,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=90,
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model or "claude-sonnet-4-6",
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=180,
         )
         r.raise_for_status()
         return r.json()["content"][0]["text"]
 
     if provider == "openai":
-        r = httpx.post(
+        r = _post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}"},
-            json={"model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=90,
+            json={
+                "model": model or "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=180,
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
+
     if provider == "gemini":
-        model = os.getenv("LLM_MODEL", "gemini-flash-latest")
-        r = httpx.post(
+        model = model or "gemini-flash-latest"
+        r = _post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             params={"key": key},
             json={
@@ -132,11 +156,7 @@ def extract_items(text: str, course: str, term_start: date) -> list[Item]:
             item = Item(course=course, **row)
         except (ValidationError, TypeError):
             # One bad row must not break the whole sheet
-            item = Item(
-                course=course,
-                title=str(row.get("title", "Unknown item")) if isinstance(row, dict) else "Unknown item",
-                type="assignment",
-                needs_review=True,
-            )
+            title = str(row.get("title", "Unknown item")) if isinstance(row, dict) else "Unknown item"
+            item = Item(course=course, title=title, type="assignment", needs_review=True)
         items.append(resolve_relative(item, term_start))
     return items

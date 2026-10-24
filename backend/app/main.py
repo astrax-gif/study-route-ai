@@ -1,126 +1,94 @@
-import { useState } from "react";
+from datetime import date
+from pathlib import Path
 
-const API = "http://127.0.0.1:8000";
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-export default function Coach({ tasks }) {
-  const days = [...new Set(tasks.map((t) => t.day))];
-  const [day, setDay] = useState(days[0] || "");
-  const [quiz, setQuiz] = useState(null);
-  const [answers, setAnswers] = useState({});
-  const [audioUrl, setAudioUrl] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState("");
+from app.extract import extract_items, pdf_to_text
+from app.ics import tasks_to_ics
+from app.quiz import make_quiz
+from app.scheduler import build_plan
+from app.schemas import PlanRequest, Task
+from app.tts import speak
 
-  if (!days.length) return null;
+app = FastAPI(title="Study Route AI")
 
-  async function start() {
-    setLoading(true);
-    setMsg("");
-    setQuiz(null);
-    setAnswers({});
-    setAudioUrl(null);
-    try {
-      const res = await fetch(`${API}/quiz`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tasks: tasks.filter((t) => t.day === day) }),
-      });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      setQuiz(await res.json());
-    } catch (e) {
-      setMsg(`Could not start the coach: ${e.message}`);
-    }
-    setLoading(false);
-  }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-  async function listen() {
-    setMsg("");
-    try {
-      const res = await fetch(`${API}/audio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: quiz.briefing }),
-      });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      setAudioUrl(URL.createObjectURL(await res.blob()));
-    } catch (e) {
-      setMsg("Audio is unavailable right now. The text version still works.");
-    }
-  }
 
-  const questions = quiz ? quiz.questions : [];
-  const score = questions.filter((q, i) => answers[i] === q.answer_index).length;
+@app.get("/health")
+def health():
+    return {"ok": True}
 
-  return (
-    <div className="space-y-3 rounded-xl border border-cyan-200 bg-cyan-50 p-4">
-      <b>🎧 Audio coach</b>
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-sm">
-          Day
-          <select
-            className="block rounded border border-slate-300 px-2 py-1"
-            value={day}
-            onChange={(e) => setDay(e.target.value)}
-          >
-            {days.map((d) => (
-              <option key={d}>{d}</option>
-            ))}
-          </select>
-        </label>
-        <button
-          className="rounded-lg bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
-          disabled={loading}
-          onClick={start}
-        >
-          {loading ? "Preparing..." : "Get today's brief + quiz"}
-        </button>
-      </div>
 
-      {msg && <div className="rounded bg-red-100 p-2 text-sm text-red-800">{msg}</div>}
+@app.post("/extract")
+async def extract(files: list[UploadFile] = File(...), start_date: date = Form(...)):
+    all_items, errors = [], []
+    for f in files:
+        course = Path(f.filename).stem
+        text = pdf_to_text(await f.read())
+        if not text:
+            errors.append(f"{f.filename}: no text found (scanned PDF? OCR not supported yet)")
+            continue
+        try:
+            items = extract_items(text, course, start_date)
+            all_items.extend(i.model_dump(mode="json") for i in items)
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            hint = (
+                "The AI service is busy. Wait a minute and try again."
+                if code in (429, 503)
+                else "Check LLM_MODEL and LLM_API_KEY in .env"
+            )
+            errors.append(f"{f.filename}: AI service error {code}. {hint}")
+        except Exception as e:
+            errors.append(f"{f.filename}: {e}")
+    return {"items": all_items, "errors": errors}
 
-      {quiz && (
-        <div className="space-y-3">
-          <p className="rounded bg-white p-3">{quiz.briefing}</p>
-          <button className="rounded-lg border border-cyan-700 px-3 py-1 text-cyan-800" onClick={listen}>
-            ▶ Listen to the brief
-          </button>
-          {audioUrl && <audio controls autoPlay src={audioUrl} className="w-full" />}
 
-          {questions.map((q, i) => (
-            <div key={i} className="rounded bg-white p-3">
-              <p className="font-semibold">
-                {i + 1}. {q.question}
-              </p>
-              <div className="mt-2 grid gap-2">
-                {q.options.map((opt, j) => {
-                  const picked = answers[i] !== undefined;
-                  let style = "border-slate-300 hover:bg-slate-50";
-                  if (picked && j === q.answer_index) style = "border-green-500 bg-green-100";
-                  else if (picked && answers[i] === j) style = "border-red-400 bg-red-100";
-                  return (
-                    <button
-                      key={j}
-                      disabled={picked}
-                      onClick={() => setAnswers((a) => ({ ...a, [i]: j }))}
-                      className={`rounded border px-3 py-2 text-left ${style}`}
-                    >
-                      {opt}
-                    </button>
-                  );
-                })}
-              </div>
-              {answers[i] !== undefined && (
-                <p className="mt-2 text-sm text-slate-600">{q.explanation}</p>
-              )}
-            </div>
-          ))}
-          {questions.length > 0 && Object.keys(answers).length === questions.length && (
-            <p className="font-bold text-cyan-800">
-              Score: {score} / {questions.length}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+@app.post("/plan")
+def plan(req: PlanRequest):
+    return build_plan(req.items, req.start_date, req.hours_per_day)
+
+
+@app.post("/export.ics")
+def export_ics(req: PlanRequest):
+    result = build_plan(req.items, req.start_date, req.hours_per_day)
+    tasks = [Task(**t) for t in result["tasks"]]
+    return Response(
+        content=tasks_to_ics(tasks),
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=study-plan.ics"},
+    )
+
+
+class QuizRequest(BaseModel):
+    tasks: list[Task]
+
+
+class SpeakRequest(BaseModel):
+    text: str
+
+
+@app.post("/quiz")
+def quiz(req: QuizRequest):
+    return make_quiz([t.model_dump(mode="json") for t in req.tasks])
+
+
+@app.post("/audio")
+def audio(req: SpeakRequest):
+    try:
+        path = speak(req.text)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Voice service error {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return FileResponse(path, media_type="audio/wav")

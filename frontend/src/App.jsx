@@ -1,5 +1,5 @@
 import { useState } from "react";
-
+import Coach from "./Coach";
 const API = "http://127.0.0.1:8000";
 
 const todayISO = () =>
@@ -310,7 +310,7 @@ export default function App() {
                 <p className="mt-3 text-sm font-semibold text-indigo-700">{notice}</p>
               )}
             </div>
-
+<Coach key={planStart + plan.tasks.length} tasks={plan.tasks} />
             {plan.at_risk.length > 0 && (
               <div className="rounded-xl border border-red-300 bg-red-50 p-4">
                 <b className="text-red-700">At risk: not enough time before the deadline</b>
