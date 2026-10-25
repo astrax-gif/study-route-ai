@@ -141,6 +141,9 @@ export default function App() {
 
   const removeItem = (i) => setItems((prev) => prev.filter((_, idx) => idx !== i));
 
+  const renameCourse = (from, to) =>
+    setItems((prev) => prev.map((it) => (it.course === from ? { ...it, course: to } : it)));
+
   const body = (start, its) =>
     JSON.stringify({ items: its, start_date: start, hours_per_day: Number(hours) });
 
@@ -224,6 +227,23 @@ export default function App() {
   const totalCount = plan ? plan.tasks.length : 0;
   const pct = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
   const today = todayISO();
+  const courseNames = [...new Set(items.map((it) => it.course))];
+
+  // "session 3 of 12" labels, so repeated days for one item can be told apart
+  const partOf = {};
+  if (plan) {
+    const totals = {};
+    const seen = {};
+    plan.tasks.forEach((t) => {
+      const k = `${t.course}|${t.title}`;
+      totals[k] = (totals[k] || 0) + 1;
+    });
+    plan.tasks.forEach((t) => {
+      const k = `${t.course}|${t.title}`;
+      seen[k] = (seen[k] || 0) + 1;
+      partOf[taskKey(t)] = totals[k] > 1 ? `session ${seen[k]} of ${totals[k]}` : "";
+    });
+  }
 
   return (
     <div className="min-h-screen">
@@ -391,6 +411,26 @@ export default function App() {
                 looks wrong. Items with no date cannot be scheduled.
               </p>
             </div>
+
+            {courseNames.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Course names</p>
+                <div className="flex flex-wrap gap-4">
+                  {courseNames.map((c, i) => (
+                    <input
+                      key={i}
+                      className="field w-64"
+                      aria-label={`Rename course ${c}`}
+                      value={c}
+                      onChange={(e) => renameCourse(c, e.target.value)}
+                    />
+                  ))}
+                </div>
+                <p className="text-xs text-ink-soft">
+                  Course names come from the file names. Rename them here and every row follows.
+                </p>
+              </div>
+            )}
 
             {errors.map((e, i) => (
               <div key={i} role="alert" className="border-l-4 border-l-pen bg-paper p-2 text-sm text-pen">
@@ -617,6 +657,11 @@ export default function App() {
                                 {t.course}
                               </span>{" "}
                               {t.title}
+                              {partOf[taskKey(t)] && (
+                                <span className="ml-2 text-sm text-ink-soft">
+                                  ({partOf[taskKey(t)]})
+                                </span>
+                              )}
                             </span>
                             <span className="ml-auto text-sm tabular-nums text-ink-soft">
                               {t.hours}h
