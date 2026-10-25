@@ -1,18 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Coach from "./Coach";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-const COLORS = [
-  "border-indigo-500 bg-indigo-50",
-  "border-cyan-500 bg-cyan-50",
-  "border-emerald-500 bg-emerald-50",
-  "border-amber-500 bg-amber-50",
-  "border-rose-500 bg-rose-50",
-  "border-violet-500 bg-violet-50",
-];
+// Each course gets its own highlighter colour (yellow is kept for "check this")
+const COURSE_COLORS = ["#ffa6c9", "#86e3bc", "#8cc8ff", "#cdb8ff", "#ffc785", "#d4ea7a"];
 const colorFor = (course, list) =>
-  COLORS[Math.max(0, list.indexOf(course)) % COLORS.length];
+  COURSE_COLORS[Math.max(0, list.indexOf(course)) % COURSE_COLORS.length];
 
 const todayISO = () =>
   new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
@@ -20,18 +14,75 @@ const todayISO = () =>
     .slice(0, 10);
 
 const taskKey = (t) => `${t.day}|${t.course}|${t.title}`;
+
+const fmtDay = (iso) => {
+  const d = new Date(iso + "T00:00:00");
+  return {
+    wd: d.toLocaleDateString("en-GB", { weekday: "short" }),
+    dm: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+  };
+};
+
 const STEPS = [
-  ["upload", "1. Upload"],
-  ["review", "2. Review"],
-  ["plan", "3. Plan"],
+  ["upload", "Upload"],
+  ["review", "Review"],
+  ["plan", "Plan"],
 ];
 
-const Spinner = ({ text }) => (
-  <div className="flex items-center gap-3 text-indigo-700">
-    <div className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
-    <span>{text}</span>
-  </div>
-);
+const ROW = "grid grid-cols-[1.3fr_2fr_1.3fr_0.8fr_0.8fr_2rem] items-center gap-3";
+
+function RouteLine({ step }) {
+  const idx = STEPS.findIndex(([id]) => id === step);
+  return (
+    <ol className="flex items-center" aria-label="Progress">
+      {STEPS.map(([id, label], i) => (
+        <li key={id} className="flex items-center">
+          <span
+            aria-current={i === idx ? "step" : undefined}
+            className={`grid h-6 w-6 place-items-center rounded-full border-2 text-xs font-bold ${
+              i <= idx
+                ? "border-ink bg-ink text-white"
+                : "border-rule bg-white text-ink-soft"
+            }`}
+          >
+            {i + 1}
+          </span>
+          <span
+            className={`ml-2 text-sm ${
+              i === idx ? "font-semibold" : "text-ink-soft"
+            }`}
+          >
+            {label}
+          </span>
+          {i < STEPS.length - 1 && (
+            <span
+              className={`mx-3 h-0.5 w-6 sm:w-14 ${i < idx ? "bg-ink" : "bg-rule"}`}
+            />
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function Working({ label, long }) {
+  const [s, setS] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setS((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  let msg = label;
+  if (long && s >= 8 && s < 25) msg = "Finding deadlines and grade weights";
+  if (long && s >= 25) msg = "Still working. Long documents can take up to a minute.";
+  return (
+    <div role="status" aria-live="polite" className="max-w-sm space-y-2">
+      <div className="indet" />
+      <p className="text-sm text-ink-soft">
+        {msg} <span className="tabular-nums">({s}s)</span>
+      </p>
+    </div>
+  );
+}
 
 export default function App() {
   const [step, setStep] = useState("upload");
@@ -49,8 +100,19 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
+  const addFiles = (list) =>
+    setFiles((prev) => {
+      const next = [...prev];
+      [...list]
+        .filter((f) => /\.(pdf|pptx)$/i.test(f.name))
+        .forEach((f) => {
+          if (!next.some((p) => p.name === f.name)) next.push(f);
+        });
+      return next;
+    });
+
   async function extract() {
-    if (!files.length) return setMessage("Choose at least one PDF or slide deck first.");
+    if (!files.length) return setMessage("Add at least one PDF or slide deck first.");
     setLoading(true);
     setMessage("");
     try {
@@ -64,7 +126,7 @@ export default function App() {
       setErrors(data.errors);
       setStep("review");
     } catch (e) {
-      setMessage(`Could not extract: ${e.message}. Is the backend running?`);
+      setMessage(`Could not read your files: ${e.message}. Check that the backend is running, then try again.`);
     }
     setLoading(false);
   }
@@ -102,7 +164,7 @@ export default function App() {
       setNotice("");
       setStep("plan");
     } catch (e) {
-      setMessage(`Could not build plan: ${e.message}`);
+      setMessage(`Could not build the plan: ${e.message}`);
     }
     setLoading(false);
   }
@@ -120,7 +182,9 @@ export default function App() {
       .map((it) => ({
         ...it,
         est_hours:
-          Math.round((it.est_hours - (doneHours[`${it.course}|${it.title}`] || 0)) * 100) / 100,
+          Math.round(
+            (it.est_hours - (doneHours[`${it.course}|${it.title}`] || 0)) * 100
+          ) / 100,
       }))
       .filter((it) => it.est_hours > 0.01);
     setLoading(true);
@@ -161,224 +225,417 @@ export default function App() {
   const pct = totalCount ? Math.round((doneCount / totalCount) * 100) : 0;
   const today = todayISO();
 
-  const input = "w-full rounded border border-slate-300 px-2 py-1";
-  const button =
-    "rounded-lg bg-indigo-600 px-5 py-2 font-semibold text-white shadow hover:bg-indigo-700 disabled:opacity-50";
-  const card = "rounded-2xl bg-white p-6 shadow-lg";
-
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800">
-      <header className="bg-gradient-to-r from-indigo-700 via-blue-600 to-cyan-600 px-6 py-8 text-white">
-        <div className="mx-auto max-w-4xl">
-          <h1 className="text-4xl font-extrabold tracking-tight">Study Route AI</h1>
-          <p className="opacity-90">The AI reads. The code plans. You study.</p>
-          <div className="mt-5 flex gap-2">
-            {STEPS.map(([id, label]) => (
-              <div
-                key={id}
-                className={`rounded-full px-4 py-1 text-sm font-semibold transition ${
-                  step === id ? "bg-white text-indigo-700" : "bg-white/20 text-white"
-                }`}
-              >
-                {label}
-              </div>
-            ))}
-          </div>
+    <div className="min-h-screen">
+      <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-6">
+        <div className="flex items-center gap-2.5">
+          <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <circle cx="6" cy="22" r="3.5" fill="#14213d" />
+            <circle cx="22" cy="6" r="3.5" fill="#fff" stroke="#14213d" strokeWidth="2.5" />
+            <path
+              d="M6 22 C6 12, 22 18, 22 6"
+              fill="none"
+              stroke="#14213d"
+              strokeWidth="2.5"
+              strokeDasharray="1 5"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span className="font-display text-xl font-bold">Study Route</span>
         </div>
+        <RouteLine step={step} />
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-6 p-6">
-        {message && <div className="rounded-lg bg-red-100 p-3 text-red-800">{message}</div>}
+      <main className="mx-auto max-w-5xl space-y-6 px-6 pb-12">
+        {message && (
+          <div role="alert" className="sheet border-l-4 border-l-pen p-3 text-pen">
+            {message}
+          </div>
+        )}
 
         {step === "upload" && (
-          <section className={`${card} space-y-5`}>
-            <h2 className="text-xl font-bold">Upload your syllabi</h2>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDrag(true);
-              }}
-              onDragLeave={() => setDrag(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDrag(false);
-                setFiles([...e.dataTransfer.files].filter((f) => /\.(pdf|pptx)$/i.test(f.name)));
-              }}
-              className={`rounded-xl border-2 border-dashed p-8 text-center transition ${
-                drag ? "border-indigo-500 bg-indigo-50" : "border-slate-300"
-              }`}
-            >
-              <p className="text-4xl">📄</p>
-              <p className="font-semibold">Drag your syllabus PDFs or slide decks here</p>
-              <label className="cursor-pointer text-indigo-600 underline">
-                or browse files
-                <input
-                  type="file"
-                  accept=".pdf,.pptx"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => setFiles([...e.target.files])}
-                />
-              </label>
+          <div className="grid gap-10 pt-4 lg:grid-cols-[1fr_1.05fr] lg:items-start">
+            <div className="space-y-6">
+              <h1 className="font-display text-4xl font-bold leading-[1.08] sm:text-5xl">
+                Upload your syllabi. Get a plan for today.
+              </h1>
+              <p className="max-w-[52ch] text-lg leading-relaxed text-ink-soft">
+                We read each course outline, pull out every deadline and grade
+                weight, and spread the work across the days you have. You check
+                everything before it becomes a plan.
+              </p>
+              <aside className="max-w-[52ch] border-l-4 border-ink pl-4 text-sm leading-relaxed">
+                <b>The AI only reads. Plain code plans.</b> The schedule comes
+                from a scheduling program, not the AI, so it never invents a due
+                date.
+              </aside>
+            </div>
+
+            <section className="sheet space-y-5 p-6">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDrag(true);
+                }}
+                onDragLeave={() => setDrag(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDrag(false);
+                  addFiles(e.dataTransfer.files);
+                }}
+                className={`rounded-md border-2 border-dashed p-8 text-center transition-colors ${
+                  drag ? "border-ink bg-sky/30" : "border-ink-soft/40"
+                }`}
+              >
+                <svg width="36" height="36" viewBox="0 0 36 36" className="mx-auto" aria-hidden="true">
+                  <path
+                    d="M9 4h13l7 7v21H9z"
+                    fill="#fff"
+                    stroke="#14213d"
+                    strokeWidth="2"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M22 4v7h7" fill="none" stroke="#14213d" strokeWidth="2" strokeLinejoin="round" />
+                  <rect x="12" y="17" width="14" height="4" fill="#ffe24d" />
+                </svg>
+                <p className="mt-3 font-semibold">Drop PDFs or slide decks here</p>
+                <label className="mt-1 inline-block cursor-pointer underline underline-offset-4 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ink">
+                  or choose files
+                  <input
+                    type="file"
+                    accept=".pdf,.pptx"
+                    multiple
+                    className="sr-only"
+                    onChange={(e) => {
+                      addFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+
               {files.length > 0 && (
-                <ul className="mt-3 text-sm text-slate-600">
+                <ul className="space-y-1">
                   {files.map((f) => (
-                    <li key={f.name}>✓ {f.name}</li>
+                    <li
+                      key={f.name}
+                      className="flex items-center justify-between rounded bg-paper px-3 py-1.5 text-sm"
+                    >
+                      <span>✓ {f.name}</span>
+                      <button
+                        type="button"
+                        className="px-2 text-ink-soft hover:text-ink"
+                        aria-label={`Remove ${f.name}`}
+                        onClick={() =>
+                          setFiles((p) => p.filter((x) => x.name !== f.name))
+                        }
+                      >
+                        ✕
+                      </button>
+                    </li>
                   ))}
                 </ul>
               )}
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="text-sm font-medium">
-                Term start date
-                <input type="date" className={input} value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)} />
-              </label>
-              <label className="text-sm font-medium">
-                Study hours per day
-                <input type="number" min="0.5" step="0.5" className={input} value={hours}
-                  onChange={(e) => setHours(e.target.value)} />
-              </label>
-            </div>
-            <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
-              🔒 Privacy: your files are used only to build your plan. Course text is sent to an
-              AI provider to read it and to a voice provider for audio. You can delete your data at any time.
-            </p>
-            {loading ? (
-              <Spinner text="Reading your files... this can take up to a minute" />
-            ) : (
-              <button className={button} onClick={extract}>Extract deadlines</button>
-            )}
-          </section>
+
+              <div className="grid grid-cols-2 gap-5">
+                <label className="text-sm font-medium">
+                  Term start date
+                  <input
+                    type="date"
+                    className="field mt-1"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                  <span className="mt-1 block text-xs font-normal text-ink-soft">
+                    Turns “Week 6” into a real date.
+                  </span>
+                </label>
+                <label className="text-sm font-medium">
+                  Study hours per day
+                  <input
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    className="field mt-1"
+                    value={hours}
+                    onChange={(e) => setHours(e.target.value)}
+                  />
+                </label>
+              </div>
+
+              <p className="text-xs leading-relaxed text-ink-soft">
+                Files are read to build your plan and are not used for training.
+                Course text goes to an AI service to read it and to a voice
+                service for audio. Extracted deadlines are cached on the server
+                so repeat uploads load faster.
+              </p>
+
+              {loading ? (
+                <Working long label="Reading your files" />
+              ) : (
+                <button className="btn btn-primary" onClick={extract}>
+                  Extract deadlines
+                </button>
+              )}
+            </section>
+          </div>
         )}
 
         {step === "review" && (
-          <section className={`${card} space-y-4`}>
-            <h2 className="text-xl font-bold">Check and correct</h2>
-            <p className="text-sm text-slate-500">
-              Yellow rows need your attention. Items with no date cannot be scheduled.
-            </p>
-            {errors.map((e, i) => (
-              <div key={i} className="rounded bg-red-100 p-2 text-sm text-red-800">{e}</div>
-            ))}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-500">
-                    <th>Course</th><th>Title</th><th>Due</th><th>Weight %</th><th>Hours</th><th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, i) => (
-                    <tr key={i} className={it.needs_review ? "bg-yellow-100" : ""}>
-                      <td className="p-1">{it.course}</td>
-                      <td className="p-1"><input className={input} value={it.title}
-                        onChange={(e) => updateItem(i, "title", e.target.value)} /></td>
-                      <td className="p-1"><input type="date" className={input} value={it.due_date || ""}
-                        onChange={(e) => updateItem(i, "due_date", e.target.value || null)} /></td>
-                      <td className="p-1"><input type="number" className={input} value={it.grade_weight}
-                        onChange={(e) => updateItem(i, "grade_weight", Number(e.target.value))} /></td>
-                      <td className="p-1"><input type="number" className={input} value={it.est_hours}
-                        onChange={(e) => updateItem(i, "est_hours", Number(e.target.value))} /></td>
-                      <td className="p-1"><button onClick={() => removeItem(i)} title="Remove">✕</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <section className="sheet space-y-5 p-6">
+            <div>
+              <h1 className="font-display text-3xl font-bold">Check what we found</h1>
+              <p className="mt-1 max-w-[60ch] text-ink-soft">
+                Highlighted rows are ones we were not sure about, usually because
+                the syllabus gave a week instead of a date. Fix anything that
+                looks wrong. Items with no date cannot be scheduled.
+              </p>
             </div>
-            <div className="flex items-center gap-3">
-              <button className="rounded-lg border px-4 py-2" onClick={() => setStep("upload")}>Back</button>
-              {loading ? <Spinner text="Planning..." /> : (
-                <button className={button} onClick={makePlan}>Build my plan</button>
+
+            {errors.map((e, i) => (
+              <div key={i} role="alert" className="border-l-4 border-l-pen bg-paper p-2 text-sm text-pen">
+                {e}
+              </div>
+            ))}
+
+            {items.length === 0 ? (
+              <p className="py-6 text-ink-soft">
+                No deadlines found. Go back and add a PDF or slide deck that
+                contains selectable text.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <div className="min-w-[760px]">
+                  <div className={`${ROW} border-b border-rule pb-2 text-sm font-semibold text-ink-soft`}>
+                    <span>Course</span>
+                    <span>Title</span>
+                    <span>Due</span>
+                    <span>Weight %</span>
+                    <span>Hours</span>
+                    <span />
+                  </div>
+                  {items.map((it, i) => (
+                    <div
+                      key={i}
+                      className={`${ROW} border-b border-rule/70 px-1 py-1.5 ${
+                        it.needs_review ? "mark" : ""
+                      }`}
+                      style={
+                        it.needs_review
+                          ? { animationDelay: `${Math.min(i, 12) * 50}ms` }
+                          : undefined
+                      }
+                    >
+                      <span className="text-sm">{it.course}</span>
+                      <input
+                        className="field"
+                        aria-label={`Title: ${it.title}`}
+                        value={it.title}
+                        onChange={(e) => updateItem(i, "title", e.target.value)}
+                      />
+                      <input
+                        type="date"
+                        className="field"
+                        aria-label={`Due date: ${it.title}`}
+                        value={it.due_date || ""}
+                        onChange={(e) => updateItem(i, "due_date", e.target.value || null)}
+                      />
+                      <input
+                        type="number"
+                        className="field tabular-nums"
+                        aria-label={`Weight percent: ${it.title}`}
+                        value={it.grade_weight}
+                        onChange={(e) => updateItem(i, "grade_weight", Number(e.target.value))}
+                      />
+                      <input
+                        type="number"
+                        className="field tabular-nums"
+                        aria-label={`Hours: ${it.title}`}
+                        value={it.est_hours}
+                        onChange={(e) => updateItem(i, "est_hours", Number(e.target.value))}
+                      />
+                      <button
+                        className="text-ink-soft hover:text-pen"
+                        aria-label={`Remove ${it.title}`}
+                        onClick={() => removeItem(i)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button className="btn btn-ghost" onClick={() => setStep("upload")}>
+                Back
+              </button>
+              {loading ? (
+                <Working label="Building your plan" />
+              ) : (
+                <button className="btn btn-primary" onClick={makePlan}>
+                  Build my plan
+                </button>
               )}
             </div>
           </section>
         )}
 
         {step === "plan" && plan && (
-          <section className="space-y-4">
-            <div className={`${card} space-y-3`}>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-xl font-bold">Your daily plan</h2>
+          <div className="space-y-6">
+            <section className="sheet space-y-4 p-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h1 className="font-display text-3xl font-bold">Your plan</h1>
+                  <p className="text-ink-soft">
+                    {doneCount} of {totalCount} tasks done
+                  </p>
+                </div>
                 <div className="flex gap-3">
-                  <button className="rounded-lg border px-4 py-2" onClick={() => setStep("review")}>Edit items</button>
-                  <button className={button} onClick={downloadIcs}>Download .ics</button>
+                  <button className="btn btn-ghost" onClick={() => setStep("review")}>
+                    Edit items
+                  </button>
+                  <button className="btn btn-primary" onClick={downloadIcs}>
+                    Download .ics
+                  </button>
                 </div>
               </div>
-              <div>
-                <div className="flex justify-between text-sm text-slate-500">
-                  <span>{doneCount} of {totalCount} tasks done</span><span>{pct}%</span>
-                </div>
-                <div className="h-3 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full bg-gradient-to-r from-indigo-500 to-cyan-500 transition-all"
-                    style={{ width: `${pct}%` }} />
-                </div>
+              <div
+                className="h-2 overflow-hidden rounded-full bg-rule"
+                role="progressbar"
+                aria-valuenow={pct}
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >
+                <div
+                  className="h-full bg-ink transition-[width] duration-300"
+                  style={{ width: `${pct}%` }}
+                />
               </div>
-              <div className="flex flex-wrap gap-2 text-xs">
+              <ul className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
                 {courses.map((c) => (
-                  <span key={c} className={`rounded-full border-l-4 px-3 py-1 ${colorFor(c, courses)}`}>{c}</span>
+                  <li key={c}>
+                    <span className="swipe font-medium" style={{ "--c": colorFor(c, courses) }}>
+                      {c}
+                    </span>
+                  </li>
                 ))}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-              <b>Fell behind?</b>
-              <p className="text-sm text-slate-600">
-                Tick what you finished, pick the day you are restarting from, and the plan is rebuilt around the work that is left.
-              </p>
-              <div className="mt-3 flex flex-wrap items-end gap-3">
-                <label className="text-sm">Re-plan from
-                  <input type="date" className={input} value={replanFrom}
-                    onChange={(e) => setReplanFrom(e.target.value)} />
-                </label>
-                {loading ? <Spinner text="Re-planning..." /> : (
-                  <button className={button} onClick={replan}>I missed a day: re-plan</button>
-                )}
-              </div>
-              {notice && <p className="mt-3 text-sm font-semibold text-indigo-700">{notice}</p>}
-            </div>
-
-            <Coach key={planStart + plan.tasks.length} tasks={plan.tasks} />
+              </ul>
+            </section>
 
             {plan.at_risk.length > 0 && (
-              <div className="rounded-2xl border border-red-300 bg-red-50 p-4">
-                <b className="text-red-700">⚠ At risk: not enough time before the deadline</b>
-                <ul className="list-disc pl-6 text-sm">
+              <section className="sheet border-l-4 border-l-pen p-5">
+                <h2 className="font-semibold text-pen">Won't fit before the deadline</h2>
+                <p className="text-sm text-ink-soft">
+                  Add study hours or move a date, then build the plan again.
+                </p>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm">
                   {plan.at_risk.map((r, i) => (
-                    <li key={i}>{r.course}: {r.title} (due {r.due_date}), {r.hours_unscheduled}h unscheduled</li>
+                    <li key={i}>
+                      {r.course}: {r.title} (due {r.due_date}), {r.hours_unscheduled}h
+                      left over
+                    </li>
                   ))}
                 </ul>
-              </div>
+              </section>
             )}
 
             {plan.unscheduled.length > 0 && (
-              <div className="rounded-2xl border border-yellow-300 bg-yellow-50 p-4 text-sm">
-                <b>No date, so not scheduled:</b>{" "}
+              <section className="sheet p-4 text-sm">
+                <span className="swipe font-semibold" style={{ "--c": "var(--color-hl-yellow)" }}>
+                  No date, so left out
+                </span>{" "}
                 {plan.unscheduled.map((u) => `${u.course}: ${u.title}`).join(", ")}
-              </div>
+              </section>
             )}
 
-            {Object.entries(byDay).map(([day, tasks]) => (
-              <div key={day} className={`${card} ${day === today ? "ring-2 ring-indigo-500" : ""}`}>
-                <h3 className="font-bold text-indigo-700">
-                  {day} {day === today && <span className="ml-2 rounded bg-indigo-600 px-2 py-0.5 text-xs text-white">TODAY</span>}
-                </h3>
-                {tasks.map((t) => (
-                  <label key={taskKey(t)}
-                    className={`mt-2 flex items-center gap-3 rounded-lg border-l-4 p-2 ${colorFor(t.course, courses)}`}>
-                    <input type="checkbox" checked={!!done[taskKey(t)]}
-                      onChange={(e) => setDone((d) => ({ ...d, [taskKey(t)]: e.target.checked }))} />
-                    <span className={done[taskKey(t)] ? "text-slate-400 line-through" : ""}>
-                      <b>{t.course}</b>: {t.title}
-                    </span>
-                    <span className="ml-auto text-sm text-slate-500">{t.hours}h</span>
-                  </label>
-                ))}
+            <section className="sheet border-l-4 border-l-ink p-5">
+              <h2 className="font-display text-xl font-bold">Fell behind?</h2>
+              <p className="max-w-[60ch] text-sm text-ink-soft">
+                Tick what you finished, pick the day you are restarting from,
+                and the plan is rebuilt around the work that is left.
+              </p>
+              <div className="mt-3 flex flex-wrap items-end gap-4">
+                <label className="text-sm font-medium">
+                  Re-plan from
+                  <input
+                    type="date"
+                    className="field mt-1 w-auto"
+                    value={replanFrom}
+                    onChange={(e) => setReplanFrom(e.target.value)}
+                  />
+                </label>
+                {loading ? (
+                  <Working label="Re-planning" />
+                ) : (
+                  <button className="btn btn-primary" onClick={replan}>
+                    I missed a day: re-plan
+                  </button>
+                )}
               </div>
-            ))}
-          </section>
+              {notice && <p className="mt-3 text-sm font-semibold">{notice}</p>}
+            </section>
+
+            <Coach key={planStart + plan.tasks.length} tasks={plan.tasks} />
+
+            <section className="sheet divide-y divide-rule">
+              {Object.entries(byDay).map(([day, tasks]) => {
+                const { wd, dm } = fmtDay(day);
+                const total = Math.round(tasks.reduce((a, t) => a + t.hours, 0) * 100) / 100;
+                return (
+                  <div key={day} className="grid gap-3 p-5 sm:grid-cols-[8rem_1fr]">
+                    <div>
+                      <div className="font-display text-2xl font-bold leading-none">{dm}</div>
+                      <div className="mt-1 text-sm text-ink-soft">
+                        {wd}, {total}h
+                      </div>
+                      {day === today && (
+                        <div className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-pen">
+                          <span className="h-2 w-2 rounded-full bg-pen" />
+                          Today
+                        </div>
+                      )}
+                    </div>
+                    <ul className="space-y-1">
+                      {tasks.map((t) => (
+                        <li key={taskKey(t)}>
+                          <label className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-paper">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-ink"
+                              checked={!!done[taskKey(t)]}
+                              onChange={(e) =>
+                                setDone((d) => ({ ...d, [taskKey(t)]: e.target.checked }))
+                              }
+                            />
+                            <span className={done[taskKey(t)] ? "text-ink-soft line-through" : ""}>
+                              <span
+                                className="swipe font-medium"
+                                style={{ "--c": colorFor(t.course, courses) }}
+                              >
+                                {t.course}
+                              </span>{" "}
+                              {t.title}
+                            </span>
+                            <span className="ml-auto text-sm tabular-nums text-ink-soft">
+                              {t.hours}h
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </section>
+          </div>
         )}
       </main>
+
+      <footer className="mx-auto max-w-5xl px-6 pb-10 text-sm text-ink-soft">
+        Study Route AI, built for Hack Global.
+      </footer>
     </div>
   );
 }

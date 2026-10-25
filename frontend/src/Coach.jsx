@@ -28,7 +28,7 @@ export default function Coach({ tasks }) {
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       setQuiz(await res.json());
     } catch (e) {
-      setMsg(`Could not start the coach: ${e.message}`);
+      setMsg(`Could not start the coach: ${e.message}. Try again in a moment.`);
     }
     setLoading(false);
   }
@@ -44,7 +44,7 @@ export default function Coach({ tasks }) {
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       setAudioUrl(URL.createObjectURL(await res.blob()));
     } catch (e) {
-      setMsg("Audio is unavailable right now. The text version still works.");
+      setMsg("Audio is unavailable right now. The written brief and quiz still work.");
     }
   }
 
@@ -52,13 +52,19 @@ export default function Coach({ tasks }) {
   const score = questions.filter((q, i) => answers[i] === q.answer_index).length;
 
   return (
-    <div className="space-y-3 rounded-xl border border-cyan-200 bg-cyan-50 p-4">
-      <b>🎧 Audio coach</b>
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-sm">
+    <section className="sheet space-y-4 p-5">
+      <div>
+        <h2 className="font-display text-xl font-bold">Audio coach</h2>
+        <p className="text-sm text-ink-soft">
+          A short spoken brief and a three-question quiz for the day you pick.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-4">
+        <label className="text-sm font-medium">
           Day
           <select
-            className="block rounded border border-slate-300 px-2 py-1"
+            className="field mt-1 block w-auto pr-6"
             value={day}
             onChange={(e) => setDay(e.target.value)}
           >
@@ -67,63 +73,76 @@ export default function Coach({ tasks }) {
             ))}
           </select>
         </label>
-        <button
-          className="rounded-lg bg-cyan-700 px-4 py-2 font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
-          disabled={loading}
-          onClick={start}
-        >
-          {loading ? "Preparing..." : "Get today's brief + quiz"}
+        <button className="btn btn-primary" disabled={loading} onClick={start}>
+          {loading ? "Preparing" : "Get today's brief + quiz"}
         </button>
       </div>
 
-      {msg && <div className="rounded bg-red-100 p-2 text-sm text-red-800">{msg}</div>}
+      {loading && <div className="indet max-w-sm" role="status" aria-label="Preparing" />}
+
+      {msg && (
+        <div role="alert" className="border-l-4 border-l-pen bg-paper p-2 text-sm text-pen">
+          {msg}
+        </div>
+      )}
 
       {quiz && (
-        <div className="space-y-3">
-          <p className="rounded bg-white p-3">{quiz.briefing}</p>
-          <button
-            className="rounded-lg border border-cyan-700 px-3 py-1 text-cyan-800"
-            onClick={listen}
-          >
+        <div className="space-y-4">
+          <p className="max-w-[65ch] border-l-4 border-l-sky pl-4 leading-relaxed">
+            {quiz.briefing}
+          </p>
+          <button className="btn btn-ghost" onClick={listen}>
             ▶ Listen to the brief
           </button>
           {audioUrl && <audio controls autoPlay src={audioUrl} className="w-full" />}
 
-          {questions.map((q, i) => (
-            <div key={i} className="rounded bg-white p-3">
-              <p className="font-semibold">
-                {i + 1}. {q.question}
-              </p>
-              <div className="mt-2 grid gap-2">
-                {q.options.map((opt, j) => {
-                  const picked = answers[i] !== undefined;
-                  let style = "border-slate-300 hover:bg-slate-50";
-                  if (picked && j === q.answer_index) style = "border-green-500 bg-green-100";
-                  else if (picked && answers[i] === j) style = "border-red-400 bg-red-100";
-                  return (
-                    <button
-                      key={j}
-                      disabled={picked}
-                      onClick={() => setAnswers((a) => ({ ...a, [i]: j }))}
-                      className={`rounded border px-3 py-2 text-left ${style}`}
-                    >
-                                            {picked && j === q.answer_index ? "✓ " : ""}{opt}
-                    </button>
-                  );
-                })}
+          {questions.map((q, i) => {
+            const picked = answers[i] !== undefined;
+            return (
+              <div key={i} className="space-y-2 border-t border-rule pt-4">
+                <p className="font-semibold">
+                  {i + 1}. {q.question}
+                </p>
+                <div className="grid gap-2">
+                  {q.options.map((opt, j) => {
+                    const correct = j === q.answer_index;
+                    const mine = answers[i] === j;
+                    let cls = "border-rule hover:border-ink";
+                    let mark = String.fromCharCode(65 + j);
+                    if (picked && correct) {
+                      cls = "border-mint bg-mint/25";
+                      mark = "✓";
+                    } else if (picked && mine) {
+                      cls = "border-pen bg-pen/10";
+                      mark = "✕";
+                    }
+                    return (
+                      <button
+                        key={j}
+                        disabled={picked}
+                        onClick={() => setAnswers((a) => ({ ...a, [i]: j }))}
+                        className={`flex items-center gap-3 rounded-md border-2 px-3 py-2 text-left ${cls}`}
+                      >
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-current text-xs font-semibold">
+                          {mark}
+                        </span>
+                        <span>{opt}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {picked && <p className="text-sm text-ink-soft">{q.explanation}</p>}
               </div>
-              {answers[i] !== undefined && (
-                <p className="mt-2 text-sm text-slate-600">{q.explanation}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
+
           {questions.length > 0 && Object.keys(answers).length === questions.length && (
-            <p className="font-bold text-cyan-800">
-              Score: {score} / {questions.length}
+            <p className="font-display text-xl font-bold">
+              Score: {score} of {questions.length}
             </p>
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
