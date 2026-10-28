@@ -210,9 +210,9 @@ def resolve_relative(item: Item, term_start: date) -> Item:
 
 def _load_rows(text: str) -> list[dict]:
     """Return extracted rows, using the cache when this exact text was read before."""
-    snippet = text[:12000]
-    # "v3|" versions the cache so old results without topics are not reused
-    cache_key = hashlib.sha256(("v3|" + snippet).encode()).hexdigest()[:24]
+    snippet = text[:40000]
+    # "v4|" versions the cache so old results without topics are not reused
+    cache_key = hashlib.sha256(("v4|" + snippet).encode()).hexdigest()[:24]
     cache_file = CACHE_DIR / (cache_key + ".json")
     if cache_file.exists():
         try:
