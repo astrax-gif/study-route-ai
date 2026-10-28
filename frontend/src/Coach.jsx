@@ -12,6 +12,25 @@ const ORDINALS = { first: 0, second: 1, third: 2, fourth: 3, last: 3, "1": 0, "2
 const NUMBER_WORDS = { one: 0, two: 1, three: 2, four: 3 };
 const CUES = new Set(["option", "answer", "letter", "number", "choice"]);
 
+// Say "2 hours", not "two point oh h"
+const spokenHours = (h) => {
+  const n = Math.round(h * 100) / 100;
+  const whole = Math.floor(n);
+  const frac = Math.round((n - whole) * 100) / 100;
+  const unit = (x) => (x === 1 ? "hour" : "hours");
+  if (frac === 0) return `${whole} ${unit(whole)}`;
+  if (frac === 0.5) return whole === 0 ? "half an hour" : `${whole} and a half hours`;
+  if (frac === 0.25) return whole === 0 ? "a quarter of an hour" : `${whole} and a quarter hours`;
+  if (frac === 0.75) return whole === 0 ? "three quarters of an hour" : `${whole} and three quarters hours`;
+  return `${n} hours`;
+};
+
+// Safety net for any text that goes to the voice
+const forSpeech = (t) =>
+  t
+    .replace(/(\d+)\.0+(?![\d])/g, "$1")
+    .replace(/\b(\d+(?:\.\d+)?)\s?h\b/gi, (_, n) => `${n} ${Number(n) === 1 ? "hour" : "hours"}`);
+
 const clean = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
 
 // Turn what the student said into an option index (0 to 3), or null if unclear
@@ -129,7 +148,7 @@ export default function Coach({ tasks }) {
       const res = await fetch(`${API}/audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: quiz.briefing }),
+        body: JSON.stringify({ text: forSpeech(quiz.briefing) }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       setAudioUrl(URL.createObjectURL(await res.blob()));
@@ -161,7 +180,7 @@ export default function Coach({ tasks }) {
       const res = await fetch(`${API}/audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: forSpeech(text) }),
       });
       if (!res.ok) throw new Error("audio");
       const url = URL.createObjectURL(await res.blob());
@@ -176,7 +195,7 @@ export default function Coach({ tasks }) {
     } catch {
       await new Promise((resolve) => {
         if (stopRef.current || !window.speechSynthesis) return resolve();
-        const u = new SpeechSynthesisUtterance(text);
+        const u = new SpeechSynthesisUtterance(forSpeech(text));
         u.onend = resolve;
         u.onerror = resolve;
         window.speechSynthesis.speak(u);
@@ -222,7 +241,7 @@ export default function Coach({ tasks }) {
       day: "numeric",
       month: "long",
     });
-    return `Your next study day is ${date}: ${names}, ${hrs} hours in total.`;
+    return `Your next study day is ${date}: ${names}, ${spokenHours(hrs)} in total.`;
   }
 
   async function runSession() {
