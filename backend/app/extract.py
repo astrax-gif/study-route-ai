@@ -28,10 +28,10 @@ Each element must have exactly these keys:
   "relative_date": text like "Week 7" or null,
   "grade_weight": number (percent of final grade, 0 if unknown),
   "est_hours": number (your estimate of hours of work),
-  "topics": array of up to 6 short strings
+  "topics": array of up to 8 short strings
 Rules:
 - Use null when unknown. NEVER guess a date.
-- "topics" must come ONLY from the syllabus text, for example the chapters or weekly topics the item covers. For an exam, list the topics from the weeks it covers. If the syllabus doesn't say, use an empty array. NEVER invent topics.
+- "topics" must come ONLY from the syllabus text. For a reading, assignment or quiz, list the chapters or weekly topics it covers. For an exam or a final project, if the syllabus has a weekly schedule or topic list, list the main topics taught in the weeks before its date (for a final or cumulative exam, the main topics of the whole course). If the syllabus truly lists no topics anywhere, use an empty array. NEVER invent topics that are not in the syllabus text.
 - If something repeats (for example homework due every second Friday), list each occurrence as its own element with its own date and the weight of one occurrence.
 - If an item has a week number but no exact date, put the week in relative_date and leave due_date null.
 - Include items with no date too (due_date null), such as class participation.
@@ -211,8 +211,8 @@ def resolve_relative(item: Item, term_start: date) -> Item:
 def _load_rows(text: str) -> list[dict]:
     """Return extracted rows, using the cache when this exact text was read before."""
     snippet = text[:12000]
-    # "v2|" versions the cache so old results without topics are not reused
-    cache_key = hashlib.sha256(("v2|" + snippet).encode()).hexdigest()[:24]
+    # "v3|" versions the cache so old results without topics are not reused
+    cache_key = hashlib.sha256(("v3|" + snippet).encode()).hexdigest()[:24]
     cache_file = CACHE_DIR / (cache_key + ".json")
     if cache_file.exists():
         try:
@@ -241,10 +241,10 @@ def _load_rows(text: str) -> list[dict]:
 
 
 def _clean_topics(value) -> list[str]:
-    """Keep topics only if they are a list of non-empty strings (max 6)."""
+    """Keep topics only if they are a list of non-empty strings (max 8)."""
     if not isinstance(value, list):
         return []
-    return [str(t).strip() for t in value if str(t).strip()][:6]
+    return [str(t).strip() for t in value if str(t).strip()][:8]
 
 
 def extract_items(text: str, course: str, term_start: date) -> list[Item]:
