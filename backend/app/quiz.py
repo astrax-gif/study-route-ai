@@ -6,7 +6,7 @@ PROMPT = """You are a friendly study coach. The student's tasks for today:
 {tasks}
 
 Return ONLY a JSON object, no markdown, with:
-  "briefing": 2 or 3 short spoken sentences telling the student what to focus on today (mention course and task names and the total of {total} hours),
+  "briefing": 2 or 3 short spoken sentences telling the student what to focus on today (mention course and task names and the total study time, written exactly like this: {total}),
   "questions": an array of exactly 3 multiple-choice questions testing basic knowledge of the topics listed in these tasks. Each question has:
      "question": string,
      "options": array of exactly 4 strings,
@@ -16,7 +16,23 @@ Rules:
 - Base every question on the topics listed above. If a task lists no topics, ask a basic question about the course subject named in the task.
 - The questions are read aloud, so keep each question under 25 words and each option under 8 words.
 - Never use "all of the above" or "none of the above".
+- Write times in words, like "2 hours". Never write "2.0" or "2h".
 - Use simple language. Never invent deadlines."""
+
+
+def spoken_hours(h) -> str:
+    """Turn 2.0 into '2 hours', 1.5 into '1 and a half hours' so the voice reads it naturally."""
+    h = round(float(h), 2)
+    whole = int(h)
+    frac = round(h - whole, 2)
+    if frac == 0:
+        return f"{whole} {'hour' if whole == 1 else 'hours'}"
+    words = {0.25: "a quarter", 0.5: "a half", 0.75: "three quarters"}
+    if frac in words:
+        if whole == 0:
+            return {0.25: "a quarter of an hour", 0.5: "half an hour", 0.75: "three quarters of an hour"}[frac]
+        return f"{whole} and {words[frac]} hours"
+    return f"{h:g} hours"
 
 
 def _valid(data: dict) -> bool:
@@ -42,13 +58,13 @@ def _line(t: dict) -> str:
     topics = t.get("topics") or []
     kind = f" [{t['type']}]" if t.get("type") else ""
     extra = f" topics: {', '.join(topics)}" if topics else ""
-    return f"- {t['course']}: {t['title']}{kind} ({t['hours']}h){extra}"
+    return f"- {t['course']}: {t['title']}{kind} ({spoken_hours(t['hours'])}){extra}"
 
 
 def make_quiz(tasks: list[dict]) -> dict:
     lines = "\n".join(_line(t) for t in tasks)
     total = round(sum(t["hours"] for t in tasks), 2)
-    prompt = PROMPT.replace("{tasks}", lines).replace("{total}", str(total))
+    prompt = PROMPT.replace("{tasks}", lines).replace("{total}", spoken_hours(total))
     for _ in range(2):
         try:
             text = call_llm(prompt)
@@ -59,5 +75,5 @@ def make_quiz(tasks: list[dict]) -> dict:
             continue
     # Fallback so the text and audio briefing still work without the AI
     names = ", ".join(f"{t['title']} for {t['course']}" for t in tasks)
-    return {"briefing": f"Today you have {len(tasks)} tasks: {names}. That is {total} hours in total.",
+    return {"briefing": f"Today you have {len(tasks)} tasks: {names}. That is {spoken_hours(total)} in total.",
             "questions": []}
