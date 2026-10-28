@@ -417,6 +417,12 @@ export default function App() {
                 </label>
               </div>
 
+              <p className="border-l-4 border-l-ink pl-3 text-sm leading-relaxed">
+                <b>Works best with course syllabi</b> that list assignments,
+                quizzes, exams or dates. A document that only describes a
+                subject, with no deadlines, will give few or no items.
+              </p>
+
               <p className="text-xs leading-relaxed text-ink-soft">
                 Files are read to build your plan and are not used for training.
                 Course text goes to an AI service to read it and to a voice
@@ -474,8 +480,9 @@ export default function App() {
 
             {items.length === 0 ? (
               <p className="py-6 text-ink-soft">
-                No deadlines found. Go back and try another file. Scanned PDFs are
-                read automatically, but the text must be readable.
+                No deadlines found. Study Route needs a syllabus that lists
+                assignments, exams or dates. Go back and try another file. Scanned
+                PDFs are read automatically, but the text must be readable.
               </p>
             ) : (
               <div className="overflow-x-auto">
