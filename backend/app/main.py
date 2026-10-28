@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.extract import extract_items, file_to_text
+from app.extract import extract_items, file_to_text, ocr_pdf
 from app.ics import tasks_to_ics
 from app.quiz import make_quiz
 from app.scheduler import build_plan
@@ -36,26 +36,49 @@ async def extract(files: list[UploadFile] = File(...), start_date: date = Form(.
     for f in files:
         course = Path(f.filename).stem.replace("_", " ")
         try:
-            text = file_to_text(f.filename, await f.read())
+            data = await f.read()
+            text = file_to_text(f.filename, data)
+            if len(text.strip()) < 50 and f.filename.lower().endswith(".pdf"):
+                try:
+                    text = ocr_pdf(data)  # scanned PDF: read it with Gemini
+                except Exception:
+                    text = ""
         except Exception:
-            errors.append(f"{f.filename}: could not read this file. Use a PDF or .pptx")
+            errors.append(
+                f"{f.filename}: could not open this file. Please upload a PDF or .pptx."
+            )
             continue
-        if not text:
-            errors.append(f"{f.filename}: no text found (scanned PDF? OCR not supported yet)")
+        if not text or len(text.strip()) < 50:
+            errors.append(
+                f"{f.filename}: this looks like a scanned PDF (pictures of pages, "
+                "no selectable text) and it could not be read. Try a text-based PDF "
+                "or a clearer scan."
+            )
             continue
         try:
             items = extract_items(text, course, start_date)
-            all_items.extend(i.model_dump(mode="json") for i in items)
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             hint = (
                 "The AI service is busy. Wait a minute and try again."
                 if code in (429, 503)
-                else "Check LLM_MODEL and LLM_API_KEY in .env"
+                else "The AI service rejected the request. Please try again later."
             )
             errors.append(f"{f.filename}: AI service error {code}. {hint}")
-        except Exception as e:
-            errors.append(f"{f.filename}: {type(e).__name__}")
+            continue
+        except Exception:
+            errors.append(
+                f"{f.filename}: the AI could not understand this file's format. "
+                "Please try again, or try a different version of the syllabus."
+            )
+            continue
+        if not items:
+            errors.append(
+                f"{f.filename}: no deadlines or assessments were found. "
+                "Check that this is a syllabus with dates or weights."
+            )
+            continue
+        all_items.extend(i.model_dump(mode="json") for i in items)
     return {"items": all_items, "errors": errors}
 
 

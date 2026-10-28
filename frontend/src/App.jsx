@@ -73,7 +73,7 @@ function Working({ label, long }) {
   }, []);
   let msg = label;
   if (long && s >= 8 && s < 25) msg = "Finding deadlines and grade weights";
-  if (long && s >= 25) msg = "Still working. Long documents can take up to a minute.";
+  if (long && s >= 25) msg = "Still working. Scanned PDFs and long documents can take up to a minute.";
   return (
     <div role="status" aria-live="polite" className="max-w-sm space-y-2">
       <div className="indet" />
@@ -229,8 +229,9 @@ export default function App() {
   const today = todayISO();
   const courseNames = [...new Set(items.map((it) => it.course))];
 
-  // "session 3 of 12" labels, so repeated days for one item can be told apart
+  // "session 3 of 12" labels, and a different slice of topics for each session
   const partOf = {};
+  const topicsFor = {};
   if (plan) {
     const totals = {};
     const seen = {};
@@ -242,6 +243,10 @@ export default function App() {
       const k = `${t.course}|${t.title}`;
       seen[k] = (seen[k] || 0) + 1;
       partOf[taskKey(t)] = totals[k] > 1 ? `session ${seen[k]} of ${totals[k]}` : "";
+      const all = t.topics || [];
+      const from = Math.floor(((seen[k] - 1) * all.length) / totals[k]);
+      const to = Math.max(Math.floor((seen[k] * all.length) / totals[k]), from + 1);
+      topicsFor[taskKey(t)] = all.slice(from, to);
     });
   }
 
@@ -440,8 +445,8 @@ export default function App() {
 
             {items.length === 0 ? (
               <p className="py-6 text-ink-soft">
-                No deadlines found. Go back and add a PDF or slide deck that
-                contains selectable text.
+                No deadlines found. Go back and try another file. Scanned PDFs are
+                read automatically, but the text must be readable.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -660,6 +665,11 @@ export default function App() {
                               {partOf[taskKey(t)] && (
                                 <span className="ml-2 text-sm text-ink-soft">
                                   ({partOf[taskKey(t)]})
+                                </span>
+                              )}
+                              {topicsFor[taskKey(t)]?.length > 0 && (
+                                <span className="block text-sm text-ink-soft">
+                                  Study: {topicsFor[taskKey(t)].join(", ")}
                                 </span>
                               )}
                             </span>

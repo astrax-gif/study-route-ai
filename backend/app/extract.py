@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import os
@@ -26,9 +27,11 @@ Each element must have exactly these keys:
   "due_date": "YYYY-MM-DD" or null,
   "relative_date": text like "Week 7" or null,
   "grade_weight": number (percent of final grade, 0 if unknown),
-  "est_hours": number (your estimate of hours of work)
+  "est_hours": number (your estimate of hours of work),
+  "topics": array of up to 6 short strings
 Rules:
 - Use null when unknown. NEVER guess a date.
+- "topics" must come ONLY from the syllabus text, for example the chapters or weekly topics the item covers. For an exam, list the topics from the weeks it covers. If the syllabus doesn't say, use an empty array. NEVER invent topics.
 - If something repeats (for example homework due every second Friday), list each occurrence as its own element with its own date and the weight of one occurrence.
 - If an item has a week number but no exact date, put the week in relative_date and leave due_date null.
 - Include items with no date too (due_date null), such as class participation.
@@ -37,12 +40,18 @@ SYLLABUS TEXT:
 <<TEXT>>
 """
 
+OCR_PROMPT = (
+    "Transcribe all the text in this document exactly as written, including "
+    "tables, dates and percentages. Return plain text only, with no commentary."
+)
+
 # Used when no API key is set, so you can test the whole pipeline for free.
 MOCK_RESPONSE = json.dumps([
     {"title": "Midterm Exam", "type": "exam", "due_date": None,
-     "relative_date": "Week 7", "grade_weight": 30, "est_hours": 10},
+     "relative_date": "Week 7", "grade_weight": 30, "est_hours": 10,
+     "topics": ["Chapter 1", "Chapter 2", "Chapter 3"]},
     {"title": "Essay 1", "type": "assignment", "due_date": "2026-11-20",
-     "relative_date": None, "grade_weight": 15, "est_hours": 6},
+     "relative_date": None, "grade_weight": 15, "est_hours": 6, "topics": []},
 ])
 
 
@@ -81,6 +90,37 @@ def _post(url, **kwargs):
             time.sleep(2 * (attempt + 1))
             continue
         return r
+
+
+def ocr_pdf(data: bytes) -> str:
+    """Read a scanned PDF with Gemini's built-in document reading."""
+    key = os.getenv("LLM_API_KEY", "").strip()
+    if not key or os.getenv("LLM_PROVIDER", "anthropic").strip().lower() != "gemini":
+        return ""
+    fallbacks = [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()]
+    models = [os.getenv("LLM_MODEL", "").strip() or "gemini-flash-latest"] + fallbacks
+    body = {
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "application/pdf",
+                                 "data": base64.b64encode(data).decode()}},
+                {"text": OCR_PROMPT},
+            ]
+        }]
+    }
+    r = None
+    for i, m in enumerate(models):
+        r = _post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+            headers={"x-goog-api-key": key},
+            json=body,
+            timeout=180,
+        )
+        if r.status_code in (400, 404, 429, 500, 502, 503, 504) and i < len(models) - 1:
+            continue
+        break
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def call_llm(prompt: str) -> str:
@@ -171,7 +211,9 @@ def resolve_relative(item: Item, term_start: date) -> Item:
 def _load_rows(text: str) -> list[dict]:
     """Return extracted rows, using the cache when this exact text was read before."""
     snippet = text[:12000]
-    cache_file = CACHE_DIR / (hashlib.sha256(snippet.encode()).hexdigest()[:24] + ".json")
+    # "v2|" versions the cache so old results without topics are not reused
+    cache_key = hashlib.sha256(("v2|" + snippet).encode()).hexdigest()[:24]
+    cache_file = CACHE_DIR / (cache_key + ".json")
     if cache_file.exists():
         try:
             return json.loads(cache_file.read_text(encoding="utf-8"))
@@ -198,11 +240,20 @@ def _load_rows(text: str) -> list[dict]:
     return rows
 
 
+def _clean_topics(value) -> list[str]:
+    """Keep topics only if they are a list of non-empty strings (max 6)."""
+    if not isinstance(value, list):
+        return []
+    return [str(t).strip() for t in value if str(t).strip()][:6]
+
+
 def extract_items(text: str, course: str, term_start: date) -> list[Item]:
     rows = _load_rows(text)
     items = []
     for row in rows:
         try:
+            if isinstance(row, dict):
+                row = {**row, "topics": _clean_topics(row.get("topics"))}
             item = Item(course=course, **row)
         except (ValidationError, TypeError):
             # One bad row must not break the whole sheet

@@ -38,7 +38,14 @@ def build_plan(items: list[Item], start: date, hours_per_day: float) -> dict:
                 capacity -= step
             for i, hours in per_item.items():
                 it = items[i]
-                tasks.append(Task(day=day, course=it.course, title=it.title, hours=round(hours, 2)))
+                tasks.append(Task(
+                    day=day,
+                    course=it.course,
+                    title=it.title,
+                    hours=round(hours, 2),
+                    type=it.type,
+                    topics=it.topics,
+                ))
             day += timedelta(days=1)
 
     at_risk = [

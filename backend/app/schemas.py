@@ -12,6 +12,7 @@ class Item(BaseModel):
     relative_date: Optional[str] = None    # e.g. "Week 7", resolved later
     grade_weight: float = 0                # percent of final grade
     est_hours: float = 2
+    topics: list[str] = []                 # chapters or weekly topics, from the syllabus only
     needs_review: bool = False
 
 
@@ -26,3 +27,5 @@ class Task(BaseModel):
     course: str
     title: str
     hours: float
+    type: str = ""
+    topics: list[str] = []
