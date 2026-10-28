@@ -111,6 +111,26 @@ export default function App() {
       return next;
     });
 
+  async function loadSamples() {
+    setMessage("");
+    try {
+      const names = [
+        "CS201_Data_Structures.pdf",
+        "MKT101_Introduction_to_Marketing.pdf",
+      ];
+      const loaded = await Promise.all(
+        names.map(async (n) => {
+          const r = await fetch(`/samples/${n}`);
+          if (!r.ok) throw new Error(n);
+          return new File([await r.blob()], n, { type: "application/pdf" });
+        })
+      );
+      addFiles(loaded);
+    } catch (e) {
+      setMessage("Could not load the sample syllabi. Please upload your own file instead.");
+    }
+  }
+
   async function extract() {
     if (!files.length) return setMessage("Add at least one PDF or slide deck first.");
     setLoading(true);
@@ -337,6 +357,15 @@ export default function App() {
                     }}
                   />
                 </label>
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    className="text-sm text-ink-soft underline underline-offset-4 hover:text-ink"
+                    onClick={loadSamples}
+                  >
+                    No syllabus handy? Try 2 sample syllabi
+                  </button>
+                </div>
               </div>
 
               {files.length > 0 && (
@@ -506,6 +535,30 @@ export default function App() {
                       >
                         ✕
                       </button>
+                      {it.needs_review && (
+                        <p className="col-span-full text-xs font-semibold text-ink">
+                          {it.due_date
+                            ? "Date estimated from the week number. Please check it."
+                            : "No date found in the syllabus. Pick a due date to add this to your plan."}
+                        </p>
+                      )}
+                      <input
+                        key={`${i}-${(it.topics || []).join("|")}`}
+                        className="field col-span-full text-sm"
+                        aria-label={`Topics to study: ${it.title}`}
+                        placeholder="Topics to study (separate with commas)"
+                        defaultValue={(it.topics || []).join(", ")}
+                        onBlur={(e) => {
+                          const topics = e.target.value
+                            .split(",")
+                            .map((x) => x.trim())
+                            .filter(Boolean)
+                            .slice(0, 8);
+                          setItems((prev) =>
+                            prev.map((row, idx) => (idx === i ? { ...row, topics } : row))
+                          );
+                        }}
+                      />
                     </div>
                   ))}
                 </div>
@@ -587,11 +640,20 @@ export default function App() {
             )}
 
             {plan.unscheduled.length > 0 && (
-              <section className="sheet p-4 text-sm">
-                <span className="swipe font-semibold" style={{ "--c": "var(--color-hl-yellow)" }}>
-                  No date, so left out
-                </span>{" "}
-                {plan.unscheduled.map((u) => `${u.course}: ${u.title}`).join(", ")}
+              <section className="sheet space-y-2 p-4 text-sm">
+                <div>
+                  <span className="swipe font-semibold" style={{ "--c": "var(--color-hl-yellow)" }}>
+                    Not in your plan yet
+                  </span>{" "}
+                  {plan.unscheduled.map((u) => `${u.course}: ${u.title}`).join(", ")}
+                </div>
+                <p className="text-ink-soft">
+                  The syllabus gave no due date for these, so they cannot be
+                  scheduled. Add a date and they join your plan.
+                </p>
+                <button className="btn btn-ghost" onClick={() => setStep("review")}>
+                  Add dates
+                </button>
               </section>
             )}
 
